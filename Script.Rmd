@@ -1,0 +1,20 @@
+---
+title: "Analysing EEG data with Bayesian LMMs and distributional regression models"
+author: "Maria Korochkina"
+date: "Last update: `r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+    theme: spacelab
+fontsize: 16pt
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
