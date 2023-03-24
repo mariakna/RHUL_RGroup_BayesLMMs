@@ -18,3 +18,42 @@ editor_options:
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
+
+```{r, results = "hide"}
+rm(list=ls())
+
+library("openxlsx")
+library("Rmisc")
+library("tidyverse")
+library("MASS")
+library("scales")
+library("rstan")
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+# bridgesampling has to be loaded before brms for brm(bf()) to work
+library("bridgesampling")
+library("brms")
+library("designr")
+library("reshape")
+library("RColorBrewer")
+library("ggpubr")
+library("bayesplot")
+library("EnvStats")
+library("purrr")
+library("magrittr")
+library("cowplot")
+library("ggdist")
+```
+
+```{r, echo = FALSE}
+setwd("C:/Users/maria/OneDrive - Royal Holloway University of London/teaching/RHUL_RGroup_BayesLMMs_27march23/RHUL_RGroup_BayesLMMs")
+```
+
+# Load and inspect data
+
+```{r}
+data <- read.csv("Data.csv", check.names = F)
+```
+
+
+
