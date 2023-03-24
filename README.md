@@ -17,3 +17,5 @@
 </p>
 <p>If there is time, I will also provide an example of how to analyse response times data with Bayesian LMMs. 
 </p>
+<p>NB: Please note that this is <strong>not</strong> a tutorial on the theory underlying Bayesian data analysis. In this tutorial, I will assume that you are familiar with the fundamental concepts and will only discuss how one can fit models in R using brms.
+</p>
