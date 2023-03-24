@@ -53,7 +53,325 @@ setwd("C:/Users/maria/OneDrive - Royal Holloway University of London/teaching/RH
 
 ```{r}
 data <- read.csv("Data.csv", check.names = F)
+
+# make sure relevant vars are factors
+data$Subj <- factor(data$Subj)
+data$Word <- factor(data$Word)
+
+data$TargetSet <- factor(data$TargetSet)
+data$Condition <- factor(data$Condition)
 ```
 
+* The data comes from a continuous primed lexical decision task (in English); it has been cleaned and contains data only for targets with correct responses and good epochs
+* We will be analysing averaged N400 amplitudes for semantically related and unrelated targets
+* N400 spatiotemporal window was defined as follows:
+  + Times: 300-500ms
+  + Electrodes: C5, C3, C1, Cz, C2, C4, C4, C6, CP5, CP3, CP1, CPz, CP2, CP4, CP6, P7, P5, P3, P1, Pz, P2, P4, P6, P8
+* NOTE THAT SOME MODELS MAY TAKE A VERY LONG TIME TO RUN
 
+## Data distribution per condition
+
+```{r}
+data %>%
+  ggplot(aes(sample = N400avg, color = Condition)) + 
+  theme_classic() + stat_qq() + stat_qq_line()
+```
+
+```{r}
+data %>%
+  ggplot(aes(x = N400avg, color = Condition)) + 
+  geom_density() + theme_classic()
+
+```
+
+## Summarise data
+
+```{r}
+sum_ampl <- data %>%
+  dplyr::group_by(Subj, Condition) %>%
+  dplyr::summarize(meanN400 = mean(N400avg))
+
+(Amplitude_N400 <- summarySE(sum_ampl, measurevar = c("meanN400"), 
+                              groupvars = "Condition",
+                       na.rm = FALSE, conf.interval = .95))
+```
+
+## Plot data
+
+Prepare for plotting
+
+```{r}
+# extract relevant cols
+Info <- data[, 1:24]
+
+N400 <- data %>%
+  dplyr::select(starts_with("N400"))
+
+dataN400 <- cbind(Info,N400)
+dataN400 <- dplyr::rename(dataN400, AvgAmpl = N400avg)
+
+# reshape
+dataN400long <- dataN400 %>%
+  pivot_longer(cols = starts_with("N400_"), names_to = "Time", values_to = "Amplitude") %>%
+  separate(Time, c("N400", "Time1", "Time2"), sep = "_")
+dataN400long = dataN400long[,-26]
+
+dataN400long$Time1 <- as.numeric(dataN400long$Time1)
+dataN400long$Time2 <- as.numeric(dataN400long$Time2)
+
+# compute the average of all trials per subj per cond per time point
+dataN400means <- dataN400long %>%
+  dplyr::group_by(Subj, Condition, Time1) %>%
+  dplyr::summarize(meanAmpl = mean(Amplitude))
+
+# compute SEs
+dataN400meansSE <- dataN400means %>%
+split(.$Time1) %>%
+  purrr::map(~summarySE(data = ., measurevar = "meanAmpl",
+                       groupvars = "Condition",
+                                      na.rm = FALSE, conf.interval = .95))
+
+# convert dataN400meansSE, a list of data frames, 
+# into a single data frame summarising the data at each time point 
+# after removing between-subject variability
+dataN400CI <- purrr::map_df(dataN400meansSE, magrittr::extract) %>%
+  mutate(Time1 = rep(unique(dataN400means$Time1), each = 2))
+```
+
+Plot
+
+```{r}
+(N400plot1 <- ggplot(dataN400means, aes(Time1, meanAmpl)) +
+  annotate(geom = "rect", xmin = 300, xmax = 500, ymin = -Inf, ymax = Inf,
+           fill = "black", alpha = 0.15) +
+  geom_ribbon(data = dataN400CI, aes(ymin = meanAmpl-ci, ymax = meanAmpl+ci,
+                                     fill = Condition, colour = Condition), 
+              linetype = "dashed", alpha = 0.3) +
+  stat_summary(fun.y = mean, geom = "line", size = 1, aes(colour = Condition)) +
+  theme_classic() +
+  theme(axis.title.x = element_text(size = rel(1.4), colour = "black"),
+        axis.title.y = element_text(size = rel(1.4), colour = "black"),
+        panel.background = element_rect(colour = "white"),
+        axis.text = element_text(size = rel(1.2), colour = "black"),
+        legend.text = element_text(size = rel(1.2), colour = "black"),
+        legend.title = element_text(size = rel(1.4), colour = "black", face = "italic"),
+        plot.title = element_text(size = rel(1.6), hjust = 0.5),
+        axis.line = element_line(colour = "black")) +
+  ggtitle("Mean amplitudes for the English targets\n at centro-parietal electrodes") +
+  labs(x = "Time (ms)",y = expression(paste("Amplitude ( ", mu,"V)")), colour = "") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_colour_manual(name = "Semantic relatedness", 
+                     labels = c("Related", "Unrelated"), 
+                     values = c("#440154FF", "#35B779FF")) + guides(colour = "none") +
+  scale_fill_manual(name = "Semantic relatedness", 
+                    labels = c("Related", "Unrelated"), 
+                    values = c("#440154FF", "#35B779FF")) + 
+  scale_x_continuous(breaks = c(-200, 0, 200, 400, 600, 800)))
+```
+
+Plot with the difference wave
+
+```{r}
+dataN400Diff <- dataN400means %>%
+  pivot_wider(names_from = Condition, values_from = meanAmpl) %>%
+  dplyr::group_by(Subj, Time1) %>%
+  dplyr::mutate(Diff = Unrelated - Related) %>%
+  pivot_longer(cols = c("Related", "Unrelated", "Diff"), names_to = "Condition", values_to = "meanAmpl")
+
+(N400plot2 <- ggplot(dataN400means, aes(Time1, meanAmpl)) +
+  annotate(geom = "rect", xmin = 300, xmax = 500, ymin = -Inf, ymax = Inf,
+           fill = "black", alpha = 0.15) +
+  geom_ribbon(data = dataN400CI, aes(ymin = meanAmpl-ci, 
+                                     ymax = meanAmpl+ci,
+                                     fill = Condition, 
+                                     colour = Condition), 
+              linetype = "dashed", alpha = 0.3) +
+  stat_summary(fun.y = mean, geom = "line", 
+               size = 1, aes(colour = Condition)) +
+  
+  stat_summary(data = dataN400Diff, fun.y = mean, 
+               geom = "line",aes(colour = Condition)) +
+  stat_summary(data = dataN400Diff, fun.data = mean_cl_boot, 
+               geom = "ribbon", alpha = 0.3, aes(fill = Condition)) +
+  
+  theme_classic() +
+  theme(axis.title.x = element_text(size = rel(1.4), colour = "black"),
+        axis.title.y = element_text(size = rel(1.4), colour = "black"),
+        panel.background = element_rect(colour = "white"),
+        axis.text = element_text(size = rel(1.2), colour = "black"),
+        legend.text = element_text(size = rel(1.2), colour = "black"),
+        legend.title = element_text(size = rel(1.4), 
+                                    colour = "black", face = "italic"),
+        plot.title = element_text(size = rel(1.4), hjust = 0.5),
+        axis.line = element_line(colour = "black")) +
+  labs(x = "Time (ms)", 
+       y = expression(paste("Amplitude ( ", mu,"V)")), colour = "") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_colour_manual(name = "Condition", 
+                    labels = c("Difference (U-R)", "Related", "Unrelated"), 
+                    values = c("#FF0000", "#440154FF", "#35B779FF")) + guides(colour = "none") +
+  scale_fill_manual(name = "Condition", 
+                    labels = c("Difference (U-R)", "Related", "Unrelated"), 
+                    values = c("#FF0000", "#440154FF", "#35B779FF")) + 
+  scale_x_continuous(breaks = c(-200, 0, 200, 400, 600, 800)))
+```
+
+Remove irrelevant columns
+
+```{r}
+dataN400 <- dataN400[, c(1:25)]
+```
+
+# Contrast coding
+
+```{r}
+# code Related as -.5 and Unrelated as .5
+dataN400$cond <- ifelse(dataN400$Condition == "Related", -.5, 5)
+```
+
+# Select model
+
+## Complete pooling model
+
+$$
+signal_{n} = Normal(\alpha + Cond_{n}*\beta, \sigma) 
+$$
+where
+
+* $signal$ is the mean amplitude in the N400 spatiotemporal window
+* $n = 1,...,N$
+* $N$ is the number of data points
+* $Cond$ is the effect of semantic relatedness
+
+This model assumes that all observations are independent, however, in our dataset, observations are grouped by subject.
+
+## No pooling model
+
+$$
+signal_{n} = Normal(\alpha_{subj[n]} + Cond_{n}*\beta_{subj[n]}, \sigma) 
+$$
+This model will estimate data separately for each subject (the subjects have no parameters in common except for sigma). This is likely to result in overfitting, i.e., individual noise will be considered useful information. We need to use the fact that all subjects did the same task.
+
+## Uncorrelated varying intercepts and slopes for subjects
+
+$$
+signal_{n} = Normal(\alpha + u_{subj[n],1} + Cond_{n}*(\beta + u_{subj[n],2}), \sigma) 
+$$
+In this model, intercept and slope are the same for all subjects, but, for each subject, there are adjustments to the intercept ($u_{subj[n],1}$) and slope ($u_{subj[n],2}$). Importantly, the model assumes that these varying intercepts and slopes are independent. But could it be that subjects with more positive amplitudes show stronger/weaker effects?
+
+## Correlated varying intercepts and slopes for subjects
+
+The likelihood function remains identical to the model with uncorrelated varying intercepts and slopes:
+
+$$
+signal_{n} = Normal(\alpha + u_{subj[n],1} + Cond_{n}*(\beta + u_{subj[n],2}), \sigma) 
+$$
+But we now define a variance-covariance matrix for the varying intercepts and slopes, where the intercepts and slopes are assumed to come from a bivariate normal distribution.
+
+\[
+\left( 
+\begin{array}{cc}
+u_{i,1} \\ 
+u_{i,2} 
+\end{array} 
+\right) \sim \left(Normal \left(
+\begin{array} {cc}
+0 \\
+0
+\end{array}
+\right), \left[
+\begin{array}{cc}
+\sigma u_{i,1}^2 & \rho \sigma u_{i,1}\sigma u_{i,2} \\ 
+\rho \sigma u_{i,1}\sigma u_{i,2} & \sigma u_{i,2}^2
+\end{array}
+\right]
+\right)
+\]
+
+where
+
+$\rho$ is the correlation parameter.
+
+## Correlated varying intercepts and slopes for subjects and items
+
+Allow the parameters to vary across the items too!
+
+$$
+signal_{n} = Normal(\alpha + u_{subj[n],1} + w_{item[n],1} + Cond_{n}*(\beta + u_{subj[n],2} + w_{item[n],2}), \sigma) 
+$$
+There are now two varince-covariance matrices:
+
+\[
+\left( 
+\begin{array}{cc}
+u_{i,1} \\ 
+u_{i,2} 
+\end{array} 
+\right) \sim \left(Normal \left(
+\begin{array} {cc}
+0 \\
+0
+\end{array}
+\right), \left[
+\begin{array}{cc}
+\sigma u_{i,1}^2 & \rho \sigma u_{i,1}\sigma u_{i,2} \\ 
+\rho \sigma u_{i,1}\sigma u_{i,2} & \sigma u_{i,2}^2
+\end{array}
+\right]
+\right)
+\]
+
+\[
+\left( 
+\begin{array}{cc}
+w_{j,1} \\ 
+w_{j,2} 
+\end{array} 
+\right) \sim \left(Normal \left(
+\begin{array} {cc}
+0 \\
+0
+\end{array}
+\right), \left[
+\begin{array}{cc}
+\sigma w_{j,1}^2 & \rho \sigma w_{j,1}\sigma w_{j,2} \\ 
+\rho \sigma w_{j,1}\sigma w_{j,2} & \sigma w_{j,2}^2
+\end{array}
+\right]
+\right)
+\]
+
+A model like this is often called *maximal model* in the frequentist framework (because it has a maximal random-effects structure for the location parameter).
+
+What does this mean in practice? That we will have to define MANY priors:
+
+* the so called *fixed* effects:
+  + $alpha$ - intercept
+  + $\beta$ - slope
+  + $\sigma$ - residual
+  + $Cond$ - effect of semantic relatedness
+  
+* the so called *random* effects:
+  + $u_{subj[n],1}$: adjustment to the intercept by subjects
+  + $w_{item[n],1}$: adjustment to the intercept by items
+  + $u_{subj[n],2}$: adjustment to the slope by subjects
+  + $w_{item[n],2}$: adjustment to the slope by items 
+
+* and hyperparameters (note that priors for hyperparameters are called hyperpriors):
+  + variance-covariance matrices (henceforth, $\Sigma_{u}$ and $\Sigma_{w}$)
+  + standard deviations for the varying intercepts (henceforth, $\tau_{u_{1}}$ and $\tau_{w_{1}}$) and slopes (henceforth, $\tau_{u_{2}}$ and $\tau_{w_{2}}$)
+  + correlations between the varying intercepts and slopes ($\rho_{u}$ and $\rho_{w}$)
+
+# Define priors
+
+## General assumptions:
+
+* ERP data is normally distributed
+* The upper bound of the SD of the EEG signal normally does not exceed 15$μV$, with the SD for the N400 averages typically falling somewhere between 8$μV$ and 15$μV$
+* The effect of interest can be either positive or negative, and it is usually rather small, i.e., between 5% and 30% of the SD of the signal
+* The signal has been baselined, i.e. the mean signal should be close 0
+* EEG data can be quite noisy, and $\sigma$ should reflect that
+* The between-subject variability in the intercepts and slopes is usually smaller than the within-subjects variability in the data, therefore, the scale of the truncated normal distribution for the standard deviations for the by-subject and by-item adjustments should be even smaller
 
