@@ -43,6 +43,7 @@ library("purrr")
 library("magrittr")
 library("cowplot")
 library("ggdist")
+library("MCMCglmm")
 ```
 
 ```{r, echo = FALSE}
@@ -364,14 +365,581 @@ What does this mean in practice? That we will have to define MANY priors:
   + standard deviations for the varying intercepts (henceforth, $\tau_{u_{1}}$ and $\tau_{w_{1}}$) and slopes (henceforth, $\tau_{u_{2}}$ and $\tau_{w_{2}}$)
   + correlations between the varying intercepts and slopes ($\rho_{u}$ and $\rho_{w}$)
 
-# Define priors
-
-## General assumptions:
+# Define priors - LMM
 
 * ERP data is normally distributed
-* The upper bound of the SD of the EEG signal normally does not exceed 15$μV$, with the SD for the N400 averages typically falling somewhere between 8$μV$ and 15$μV$
-* The effect of interest can be either positive or negative, and it is usually rather small, i.e., between 5% and 30% of the SD of the signal
 * The signal has been baselined, i.e. the mean signal should be close 0
+* The upper bound of the SD of the EEG signal normally does not exceed 15$μV$, with the SD for the N400 averages typically falling somewhere between 8$μV$ and 15$μV$
 * EEG data can be quite noisy, and $\sigma$ should reflect that
+
+Given the above, we could assume the following: 
+
+* $\alpha$
+
+```{r}
+sample_a <- rnorm(20000, mean = 0, sd = 5)
+c(mean = mean(sample_a), sd = sd(sample_a))
+```
+
+* $\sigma$
+
+```{r}
+sample_sig <- rtnorm(20000, mean = 0, sd = 10, lower = 0)
+c(mean = mean(sample_sig), sd = sd(sample_sig))
+```
+
+* The effect of interest can be either positive or negative, and it is usually rather small, i.e., between 5% and 30% of the SD of the signal
+
+Given this, it would make sense to include three priors in the sensitivity analysis:
+
+* small effect: about 10% of the SD of the signal:
+
+```{r}
+sample_b <- rnorm(20000, mean = 0, sd = 1)
+effect <- (sample_a + 0.5*sample_b) - (sample_a - 0.5*sample_b)
+c(mean = mean(effect), sd = sd(effect))
+quantile(effect, probs = c(0.025, .975))
+```
+
+This prior assumes that 95% of the values fall between about -2$μV$ and 2$μV$.
+
+* medium-sized effect: about 20% of the SD of the signal:
+
+```{r}
+sample_b <- rnorm(20000, mean = 0, sd = 2)
+effect <- (sample_a + 0.5*sample_b) - (sample_a - 0.5*sample_b)
+c(mean = mean(effect), sd = sd(effect))
+quantile(effect, probs = c(0.025, .975))
+```
+
+This prior assumes that 95% of the values fall between about -4$μV$ and 4$μV$.
+
+* large effect: about 30% of the SD of the signal:
+
+```{r}
+sample_b <- rnorm(20000, mean = 0, sd = 3)
+effect <- (sample_a + 0.5*sample_b) - (sample_a - 0.5*sample_b)
+c(mean = mean(effect), sd = sd(effect))
+quantile(effect, probs = c(0.025, .975))
+```
+
+This prior assumes that 95% of the values fall between about -6$μV$ and 6$μV$.
+
 * The between-subject variability in the intercepts and slopes is usually smaller than the within-subjects variability in the data, therefore, the scale of the truncated normal distribution for the standard deviations for the by-subject and by-item adjustments should be even smaller
 
+Since we don’t have any specific prior information about subject-level vs. item-level variation, we can assume identical priors for by-subject and by-subject effects (but this, of course, is an oversimplification...):
+
+  + $\tau_{u_{1}} \sim Normal_{+}(0,5)$
+  + $\tau_{w_{1}} \sim Normal_{+}(0,5)$
+  + $\tau_{u_{2}} \sim Normal_{+}(0,5)$
+  + $\tau_{w_{2}} \sim Normal_{+}(0,5)$ 
+
+* Finally, we will take the LKJ-prior for the correlation parameter
+  + $\rho \sim LKJcorr(2)$
+  + The basic idea is that as the parameter of this prior increases, it increasingly favors correlations closer to zero
+  + We set the parameter to 2 to make extreme correlations unlikely
+  + This gives us a regularising but still rather uninformative prior
+  
+**In this exercise, the sensitivity analysis will include different priors for the effect of interest only, but note that this does not have to be the case.**
+
+How do we set the priors in brms? 
+
+Long version (for prior set 1):
+
+```{r}
+priors1_long <- c(
+  
+  ## fixed effects:
+  
+  prior(normal(0, 5), class = Intercept), 
+  prior(normal(0, 1), class = b, coef = Cond), 
+  prior(normal(0, 10), class = sigma),
+    
+    ## for by-subj adjustments:
+    
+    # intercept
+    prior(normal(0, 5),
+      class = sd, coef = Intercept,
+      group = subj),
+    # slope
+    prior(normal(0, 5),
+      class = sd, coef = Cond,
+      group = subj),
+    # correlation matrix
+    prior(lkj(2), class = cor, group = subject),
+    
+    ## for by-item adjustments:
+    
+    # intercept
+    prior(normal(0, 5),
+      class = sd, coef = Intercept,
+      group = item),
+    # slope
+    prior(normal(0, 5),
+      class = sd, coef = Cond,
+      group = item),
+    # correlation matrix
+    prior(lkj(2), class = cor, group = item))
+```
+
+Short version (for prior set 1):
+ 
+```{r}
+priors1 <- c(set_prior("normal(0, 5)", class = "Intercept"),
+            set_prior ("normal(0, 1)", class = "b"),
+            set_prior ("normal(0, 5)", class = "sd"),
+            set_prior ("normal(0, 10)", class = "sigma"),
+            set_prior ("lkj(2)", class = "cor"))
+```
+
+# Prior set 1 - LMM
+
+## Prior predicitive checks
+
+Sample from priors
+
+```{r, eval =! file.exists("data_from_analysis/priors1_check.RDS")}
+Priors1_check <- brm(AvgAmpl ~ 1 + cond + (1 + cond | Subj) + (1 + cond | Word),
+             data = dataN400,
+             family = gaussian(),
+             prior = priors1,
+             warmup = 2000,
+             iter = 10000,
+             cores = 4,
+             save_pars = save_pars(all = TRUE),
+             control = list(adapt_delta = 0.99, max_treedepth = 15),
+             sample_prior = "only")
+saveRDS(Priors1_check,"data_from_analysis/priors1_check.RDS")
+```
+
+```{r, echo = F}
+if(!file.exists("data_from_analysis/priors1_check.RDS")){
+    saveRDS(Priors1_check,"data_from_analysis/priors1_check.RDS")} else {
+    Priors1_check <- readRDS("data_from_analysis/priors1_check.RDS")}
+```
+
+Visualise priors
+
+```{r}
+#color_scheme_set("gray")
+mcmc_areas(as.array(Priors1_check), 
+            pars = c("b_Intercept", "b_cond"), 
+            prob = .95, 
+            point_est = "mean") +
+     labs(x = expression(paste("Amplitude (", mu,"V)"))) +
+     theme_bw() +
+     theme(text = element_text(size = 14)) +
+     geom_vline(xintercept = 0, linetype = "dotted") +
+     scale_y_discrete(limits = c("b_Intercept", "b_cond"),
+                      breaks = c("b_Intercept", "b_cond"),
+                      labels = c("Intercept", "Effect of semantic relatedness"))
+```
+
+Inspect prior predictive distribution
+
+```{r}
+# Compare distribution of y to distributions of multiple yrep datasets
+pp_check(Priors1_check, ndraws = 100) +
+  scale_x_continuous(expression(paste("Amplitude (", mu,"V)"))) +
+  ggtitle("Prior predictive distribution")
+```
+
+Check mean, mix and max
+
+```{r}
+#memory.limit(size = 56000)
+pp_check(Priors1_check, type = "stat", stat = "mean", ndraws = 100) +
+  coord_cartesian(xlim = c(-50,50)) +
+  scale_x_continuous(expression(paste("Amplitude (", mu,"V)"))) +
+  ggtitle("Prior predictive distribution of means")
+```
+
+```{r}
+pp_check(Priors1_check, type = "stat", stat = "min", ndraws = 100) +
+  coord_cartesian(xlim = c(-250,50)) +
+  scale_x_continuous(expression(paste("Amplitude (", mu,"V)"))) +
+  ggtitle("Prior predictive distribution (min)")
+```
+
+```{r}
+pp_check(Priors1_check, type = "stat", stat = "max", ndraws = 100) +
+  coord_cartesian(xlim = c(-50,250)) +
+  scale_x_continuous(expression(paste("Amplitude (", mu,"V)"))) +
+  ggtitle("Prior predictive distribution (max)")
+```
+
+## Fit the model
+
+```{r, eval =! file.exists("data_from_analysis/m1.RDS")}
+m1 <- brm(AvgAmpl ~ 1 + cond + (1 + cond | Subj) + (1 + cond | Word),
+             data = dataN4002,
+             family = gaussian(),
+             prior = priors1,
+             warmup = 2000,
+             iter = 10000,
+             cores = 4,
+             save_pars = save_pars(all = TRUE),
+             control = list(adapt_delta = 0.99, max_treedepth = 15))
+
+saveRDS(m1,"data_from_analysis/m1.RDS")
+```
+
+```{r, echo = F}
+if(!file.exists("data_from_analysis/m1.RDS")){
+    saveRDS(m1,"data_from_analysis/m1.RDS")} else {
+    m1 <- readRDS("data_from_analysis/m1.RDS")}
+```
+
+## Posterior fit and posterior predictive checks
+
+Inspect Bulk ESS, tail ESS, R hat
+
+* ESS is an estimate of the sample size required to achieve the same level of precision if that sample was a simple random sample (i.e., n independent samples)
+* "how much independent information there is in autocorrelated chains" (Kruschke 2015, pp. 182-183)
+* Schould be as large as possible, at least 1000
+
+```{r}
+m1
+```
+
+Plot posterior densities and trace plots
+
+```{r}
+m1_trace <- plot(m1, pars = "^b_")
+m1_trace <- do.call("plot_grid", c(m1_trace, nrow = 1))
+```
+
+Plot posterior distributions
+
+```{r}
+pp_check(m1, ndraws = 100)
+```
+
+How well does the model capture the by-subject data pattern?
+
+```{r}
+ppc_dens_overlay_grouped(dataN400$AvgAmpl,
+  yrep = posterior_predict(m1, ndraws = 100),
+  group = dataN400$Subj) +
+  xlab("Signal in the N400 spatiotemporal window")
+```
+
+Plot posterior distributions of the SDs per subject and compare them with the observed SDs
+
+```{r}
+pp_check(m1,
+  type = "stat_grouped", 
+  ndraws = 1000,
+  group = "Subj",
+  stat = "sd")
+```
+
+It seems that the by-subject noise level is misfitted for some subjects. We can try and rectify this by using distributional regression and specifying random effects for the scale parameter, $\sigma$ (in addition to the location parameter, $\mu$).
+
+# Define priors - DRM
+
+Let's add random-effects structure to $\sigma$, like so:
+
+$$
+signal_{n} = Normal(\alpha + u_{subj[n],1} + w_{item[n],1} + Cond_{n}*(\beta + u_{subj[n],2} + w_{item[n],2}), \sigma_{n}) 
+$$
+
+where
+
+$$
+\sigma_{n} = exp(\sigma_{\alpha} + \sigma_{u_{subj[n]}})
+$$
+
+Note that the only reason we exponentiate is so that, if adjustments to $\sigma$ are negative, $\sigma$ itself does not become negative.
+
+Now we need new priors for $\sigma$, too.
+
+* $\sigma_{\alpha} \sim Normal(0, log(10))$
+* $\sigma_{u} \sim Normal(0, \tau_{\sigma_{u}})$
+* $\tau_{\sigma_{u}} \sim Normal_{+}(0, 5) $
+
+Everything else stays the same!
+
+In brms:
+
+```{r}
+priors1d <- c(set_prior("normal(0, 5)", class = "Intercept"),
+            set_prior ("normal(0, 1)", class = "b"), 
+            set_prior ("normal(0, 5)", class = "sd"), 
+            set_prior ("lkj(2)", class = "cor"),
+            set_prior ("normal(0, log(10))", 
+                       class = "Intercept", dpar = "sigma"),
+            set_prior("normal(0,5)", class = "sd", 
+                      group = "Subj", dpar = "sigma"))
+```
+
+# Prior set 1 - DRM
+
+## Prior predictive checks
+
+Sample from priors 
+
+```{r, eval =! file.exists("data_from_analysis/priors1d_check.RDS")}
+Priors1d_check <- brm(bf(
+  AvgAmpl ~ 1 + cond + (1 + cond | Subj) + (1 + cond | Word),
+  sigma ~ 1 + (1 | Subj)),
+             data = dataN400,
+             family = gaussian(),
+             prior = priors1d,
+             warmup = 2000,
+             iter = 10000,
+             cores = 4,
+             save_pars = save_pars(all = TRUE),
+             control = list(adapt_delta = 0.99, max_treedepth = 15),
+             sample_prior = "only")
+
+saveRDS(Priors1d_check,"data_from_analysis/priors1d_check.RDS")
+```
+
+```{r, echo = F}
+if(!file.exists("data_from_analysis/priors1d_check.RDS")){
+    saveRDS(Priors1d_check,"data_from_analysis/priors1d_check.RDS")
+} else {
+    Priors1d_check <- readRDS("data_from_analysis/priors1d_check.RDS")}
+```
+
+Visualise priors
+
+```{r}
+mcmc_areas(as.array(Priors1d_check), 
+            pars = c("b_Intercept", "b_cond", "b_sigma_Intercept"), 
+            prob = .95, 
+            point_est = "mean") +
+     labs(x = expression(paste("Amplitude (", mu,"V)"))) +
+     theme_bw() +
+     theme(text = element_text(size = 14)) +
+     geom_vline(xintercept = 0, linetype = "dotted") +
+     scale_y_discrete(limits = c("b_Intercept", "b_cond", "b_sigma_Intercept"),
+                      breaks = c("b_Intercept", "b_cond", "b_sigma_Intercept"),
+                      labels = c("Intercept", "Effect of condition", "Intercept for sigma"))
+```
+
+## Fit the model
+
+```{r, eval =! file.exists("data_from_analysis/m1d.RDS")}
+m1d <- brm(bf(
+  AvgAmpl ~ 1 + cond + (1 + cond | Subj) + (1 + cond | Word),
+  sigma ~ 1 + (1 | Subj)),
+             data = dataN400,
+             family = gaussian(),
+             prior = priors1d,
+             warmup = 2000,
+             iter = 10000,
+             cores = 4,
+             save_pars = save_pars(all = TRUE),
+             control = list(adapt_delta = 0.99, max_treedepth = 15))
+
+saveRDS(m1d,"data_from_analysis/m1d.RDS")
+```
+
+```{r, echo = F}
+if(!file.exists("data_from_analysis/m1d.RDS")){
+    saveRDS(m1d,"data_from_analysis/m1d.RDS")
+} else {
+    m1d <- readRDS("data_from_analysis/m1d.RDS")}
+```
+
+## Posterior fit and posterior predictive checks
+
+```{r}
+m1d
+```
+
+Plot posterior densities and trace plots
+
+```{r}
+m1d_trace <- plot(m1d, pars = "^b_")
+m1d_trace <- do.call("plot_grid", c(m1d_trace, nrow = 1))
+```
+
+Plot posterior distributions
+
+```{r}
+pp_check(m1d, ndraws = 100)
+```
+
+How well does the model capture the by-subject data pattern?
+
+```{r}
+ppc_dens_overlay_grouped(dataN400$AvgAmpl,
+  yrep = posterior_predict(m1d, ndraws = 100),
+  group = dataN400$Subj) +
+  xlab("Signal in the N400 spatiotemporal window")
+```
+
+Plot posterior distributions of the SDs per subject and compare them with the observed SDs
+
+```{r}
+pp_check(m1d,
+  type = "stat_grouped", 
+  ndraws = 1000,
+  group = "Subj",
+  stat = "sd")
+```
+
+## Summarise model
+
+```{r}
+round(fixef(m1d),3)
+```
+
+Plot mean effect of semantic relatedness
+
+```{r}
+cond1_d <- posterior_samples(m1d)$b_cond
+ggplot(as.data.frame(cond1_d), aes(x = cond1_d)) + 
+  geom_histogram(aes(y = ..density..), fill = "darkgray") +
+  theme_classic() +
+  ylab("Density") +
+  xlab("Effect of condition (microvolts)") +
+  ggtitle("Mean effect of semantic relatedness,\nprior 1") +
+  theme(axis.title.x = element_text(size = rel(1.4), 
+                                    colour = "black", face = "bold"),
+        axis.title.y = element_text(size = rel(1.4), 
+                                    colour = "black", face = "bold"),
+        panel.background = element_rect(colour = "white"),
+        axis.text = element_text(size = rel(1.2), colour = "black"),
+        legend.text = element_text(size = rel(1.2), colour = "black"),
+        legend.title = element_text(size = rel(1.4), 
+                                    colour = "black", face = "bold"),
+        plot.title = element_text(size = rel(1.4), 
+                                  face = "bold", hjust = 0.5),
+        axis.line = element_line(colour = "black"))
+```
+
+Uncertainty intervals computed from posterior draws 
+
+```{r}
+mcmc_plot(m1d, type = "intervals")
+```
+
+Density plot (uncertainty intervals shown as shaded areas under the curves)
+
+```{r}
+mcmc_areas(as.array(m1d), 
+            pars = c("b_Intercept", "b_cond", "b_sigma_Intercept"), 
+            prob = .95, 
+            point_est = "mean") +
+    labs(x = expression(paste("Amplitude (", mu,"V)"))) +
+    theme_bw() +
+    theme(text = element_text(size = 14)) +
+    geom_vline(xintercept = 0, linetype = "dotted") +
+    scale_y_discrete(limits = c("b_Intercept", "b_cond", "b_sigma_Intercept"),
+                   breaks = c("b_Intercept", "b_cond", "b_sigma_Intercept"),
+                   labels = c("Intercept" ,"Effect of condition", "Intercept for sigma"))
+```
+
+Compare prior and posterior probabilities
+
+```{r}
+# generate samples from the prior:
+N <- length(cond1_d)
+sample_cond_prior <- rnorm(N, 0, 1)
+samples <- tibble(
+  sample = c(cond1_d, sample_cond_prior),
+  distribution = c(rep("Posterior", N), rep("Prior", N)))
+
+ggplot(samples, aes(x = sample, fill = distribution)) +
+  geom_density(alpha = .5) + theme_classic() +
+  ylab("Density") +
+  xlab("Probability (microvolts)") +
+  ggtitle("Prior vs. posterior probablity\nfor the effect of semantic relatedness,\nprior 1") +
+  theme(axis.title.x = element_text(size = rel(1.4), 
+                                    colour = "black", face = "bold"),
+        axis.title.y = element_text(size = rel(1.4), 
+                                    colour = "black", face = "bold"),
+        panel.background = element_rect(colour = "white"),
+        axis.text = element_text(size = rel(1.2), colour = "black"),
+        legend.text = element_text(size = rel(1.2), colour = "black"),
+        legend.title = element_text(size = rel(1.4), 
+                                    colour = "black", face = "bold"),
+        plot.title = element_text(size = rel(1.4), 
+                                  face = "bold", hjust = 0.5),
+        axis.line = element_line(colour = "black")) + 
+  labs(fill = "Distribution") +
+  scale_fill_brewer(palette = "Dark2") 
+```
+
+## Fit null model
+
+```{r, eval =! file.exists("data_from_analysis/m1d_null.RDS")}
+m1d_null <- brm(bf(
+  AvgAmpl ~ 1 + (1 + cond | Subj) + (1 + cond | Word),
+  sigma ~ 1 + (1 | Subj)),
+             data = dataN400,
+             family = gaussian(),
+             prior = priors1d[-2,],
+             warmup = 2000,
+             iter = 10000,
+             cores = 4,
+             save_pars = save_pars(all = TRUE),
+             control = list(adapt_delta = 0.99, max_treedepth = 15))
+
+saveRDS(m1d_null,"data_from_analysis/m1d_null.RDS")
+```
+
+```{r, echo = F}
+if(!file.exists("data_from_analysis/m1d_null.RDS")){
+    saveRDS(m1d_null,"data_from_analysis/m1d_null.RDS")
+} else {
+    m1d_null <- readRDS("data_from_analysis/m1d_null.RDS")
+}
+```
+
+At this point you should do the same model diagnostics as those shown above...
+
+## Estimate BF
+
+### Compute marginal likelihoods
+
+Model of interest
+
+```{r, eval =! file.exists("data_from_analysis/m1d_ml.RDS")}
+m1d_ml <- bridge_sampler(m1d, silent = TRUE)
+saveRDS(m1d_ml,"data_from_analysis/m1d_ml.RDS")
+```
+
+```{r, echo = F}
+if(!file.exists("data_from_analysis/m1d_ml.RDS")){
+    saveRDS(m1d_ml,"data_from_analysis/m1d_ml.RDS")
+} else {
+    m1d_ml <- readRDS("data_from_analysis/m1d_ml.RDS")}
+```
+
+Null model
+
+```{r, eval =! file.exists("data_from_analysis/m1d_null_ml.RDS")}
+m1d_null_ml <- bridge_sampler(m1d_null, silent = TRUE)
+saveRDS(m1d_null_ml,"data_from_analysis/m1d_null_ml.RDS")
+```
+
+```{r, echo = F}
+if(!file.exists("data_from_analysis/m1d_null_ml.RDS")){
+    saveRDS(m1d_null_ml,"data_from_analysis/m1d_null_ml.RDS")
+} else {
+    m1d_null_ml <- readRDS("data_from_analysis/m1d_null_ml.RDS")}
+```
+
+### Compute BF
+
+```{r}
+bf1 <- bayes_factor(m1d_ml, m1d_null_ml)
+```
+
+```{r}
+bf1$bf 
+1/bf1$bf 
+```
+
+# Next steps
+
+You should now fit the models (model of interest and the null model) with the other two sets of priors and compute Bayes factors. You can then compare whether the BFs have changed depending on the prior on the effect of semantic relatedness.
+
+# Bonus
+
+[See here](https://osf.io/8mj5n) for one way to analyse RT data with Bayesian LMMs.
