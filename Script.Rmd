@@ -46,10 +46,6 @@ library("ggdist")
 library("MCMCglmm")
 ```
 
-```{r, echo = FALSE}
-setwd("C:/Users/maria/OneDrive - Royal Holloway University of London/teaching/RHUL_RGroup_BayesLMMs_27march23/RHUL_RGroup_BayesLMMs")
-```
-
 # Load and inspect data
 
 ```{r}
@@ -656,7 +652,7 @@ Now we need new priors for $\sigma$, too.
 
 * $\sigma_{\alpha} \sim Normal(0, log(10))$
 * $\sigma_{u} \sim Normal(0, \tau_{\sigma_{u}})$
-* $\tau_{\sigma_{u}} \sim Normal_{+}(0, 5) $
+* $\tau_{\sigma_{u}} \sim Normal_{+}(0, 5)$
 
 Everything else stays the same!
 
